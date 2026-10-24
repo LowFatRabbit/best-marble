@@ -1,0 +1,17 @@
+{
+  "name": "최고! 마블",
+  "short_name": "최고! 마블",
+  "description": "아이 그림을 옮긴 연필 스케치 미션 보드게임",
+  "lang": "ko",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#d5cab5",
+  "theme_color": "#d5cab5",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
