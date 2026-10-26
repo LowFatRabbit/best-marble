@@ -72,7 +72,10 @@ button{font-family:inherit;color:inherit}
   box-shadow:0 0.3cqw 0 #e6e2d8, 0 1.2cqw 2.6cqw rgba(70,55,30,.22)}
 .spiral{position:absolute;left:2.5%;right:2.5%;top:-1.5cqw;height:3.4cqw;z-index:3;pointer-events:none;
   background-repeat:repeat-x;background-size:1.75cqw 100%}
-#board{position:absolute;inset:0;width:100%;height:100%;z-index:1;overflow:hidden}
+/* board layers: hatch (live) → pencil ink (bitmap, drawn once) → labels (live) → tokens (own layer) */
+.layer{position:absolute;inset:0;width:100%;height:100%;z-index:1;overflow:hidden;display:block}
+#ink,#tokLayer{pointer-events:none}
+#tokLayer{will-change:transform}
 
 /* board drawing */
 .pl1{fill:none;stroke:var(--graphite);stroke-width:3.4;stroke-linecap:round;stroke-linejoin:round;opacity:.88}
@@ -222,16 +225,20 @@ button{font-family:inherit;color:inherit}
     <div class="backing" aria-hidden="true"></div>
     <div class="sheet" aria-hidden="true"></div>
     <div class="spiral" aria-hidden="true"></div>
-    <svg id="board" viewBox="0 0 1400 1000" role="img" aria-label="미션 게임 판">
+    <svg id="under" class="layer" viewBox="0 0 1400 1000" aria-hidden="true">
       <defs id="defs"></defs>
-      <g id="owned" filter="url(#pencil)"></g>
-      <g id="lines" filter="url(#pencil)"></g>
-      <g id="art" class="doodle" filter="url(#pencil)"></g>
+      <g id="owned"></g>
+      <g id="lines"></g>
+      <g id="art" class="doodle"></g>
+    </svg>
+    <canvas id="ink" class="layer" aria-hidden="true"></canvas>
+    <svg id="board" class="layer" viewBox="0 0 1400 1000" role="img" aria-label="미션 게임 판">
+      <g id="dtext" class="doodle"></g>
       <g id="labels"></g>
       <g id="flags"></g>
       <g id="hl"></g>
-      <g id="tokens"></g>
     </svg>
+    <svg id="tokLayer" class="layer" viewBox="0 0 1400 1000" aria-hidden="true"><g id="tokens"></g></svg>
     <div id="center"></div>
     <div id="toasts" aria-live="polite"></div>
     <div id="modal" hidden><div id="card" class="card" role="dialog" aria-modal="true"></div></div>
@@ -436,28 +443,80 @@ async function keepAwake(){ try { if ('wakeLock' in navigator && document.visibi
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && state.phase === 'play') keepAwake(); });
 
 /* ---------- textures ---------- */
+/* Textures are plain bitmaps so repaints stay cheap: the table is a tiny pre-rendered JPEG,
+   the paper grain is random pixel noise made once at start-up. */
+const PEBBLE_JPG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAkGBwgHBgkIBwgKCgkLDRYPDQwMDRsUFRAWIB0iIiAdHx8kKDQsJCYxJx8fLT0tMTU3Ojo6Iys/RD84QzQ5Ojf/2wBDAQoKCg0MDRoPDxo3JR8lNzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzf/wgARCAG4AbgDASIAAhEBAxEB/8QAGAABAQEBAQAAAAAAAAAAAAAAAQACAwb/xAAWAQEBAQAAAAAAAAAAAAAAAAAAAgP/2gAMAwEAAhADEAAAAfQMZW40giYUNRDEGqKgkSqCI1CBQmsi5haIQGSIGEHKKIIDSVRVAaAiN2dFlwa1nRQlnQSQwkMVAlktY0I4N2dDQJJRCUNRUDQIhOUzaybs6KA1WTUJWYtEBsDQgkOdRjVCZ0IxZYJiRIYwqWdQMFnQTRUhEIhNCZ0Cxlgk0BRqozagENVFlDKxaEhCcbBzC0ZmCQXKBoNRDUFAzkY0EIIiIY0IzGLQJrIKlUVRkkZyNmNxE50AxnVBKRAwFrGhFKgrMahHOsjUZ1jQ51DQNQTAiEIMDYjbnQVAwaBBYghmCYiicxoks6DOqGIcoTQ0FnUU5DWdEQbxvJazoqgoEYrKUw0DEOdRnUDUWdREGhANJk0mVBhKoJjKwZ2FEaqDOkysQwTAwTjQ2Y0MYtJi1CMZtRjWU0QNnRVDjQDQxoyoFRrOsiayVIUGw0Y1JUFUNRRCUWd5Msi50UQjFnQJBVCKWXI6xsKSqIkGjMw51kbOhrI2I3Z2Z0JCDCVAwFMNRFk05SbJoEmBCGyHSxGkhzqM6gqQkGEqCmKMmo0BqCEkiSEyjUJJEhSUIGgzoSxqLUFUQpm1GbUYZGoBQSHLk0kUaBzDjeQ1I50GLYCxZ1GJh0IVCMFJlkiicaGoBiGMxoZgmIYqBCCk0SWdBnQhIMg5g1CVBokqiILWdFQTlEQnEbEJImCIFzsxpirIxGrOiKDQC50VRRDEZcJukqBqAg2SVRFFEJoM6kBiNAOdGdSFJZ1GdUQwDFUDQjg3mTOso1CMRJhUzqA0JVBMZWBgHKLRDkXGgSNVk1lSqBEqiGCEagmMDGqQaMG8mkQYKEHOhqBIqhLIsgIYVFohCmBos6DOjRWUpjLRVEgWhKIQSNAOY3YRGEQzsQNA2dBZTVAWos6AaJoM7yKQwlUVA5UxsSoGgRAaDWNlUZaEQoSkEQYiRMyCwUxUE0QwIgkJRUmdCVA41k0iVRk0GihIGkHMaqM6A1nWTOpHLCMY1Q2dFETRVFCCJVFUWdBVk2UTnRkYWiqKoIDedAWoEhqKozaixvAokwTlEYyoQQ6yjEVJWdFQMQlAMNRIlZjQgJDZRzoNVA0QhJFMVRZ0BrOgcwolnWC3z0VoHOgGgTQVEgNlGERyNnQaIDUJQwhIEw1FUURZ1FUSJZYNEEaEg1lTGpKEihEKomgzvJnchSQhMEkNlKokQaCg1CDRhkYBqKgWBxsDUDEJAudESYWI1FUQ5GkBQaCoqBs6BYGwbsaKkBA1QwgCRsCYhSEKkzSVQ1EMZNAwiQaBGAUSBDVFQU5DQjUFA0gEaRCIWjK5GNBUOdZNY1BoTGhGzooDVlGgSihKoijWNRnYgkIggk5jVkNZ1AkCaKI1UVQNFZRswimViqBEKBSHKgaCoLWdFURBoQoSspqoM7yZ1aMm4JyaypjVCMDRQg5QYGYhARHLGGiNRJoxoRzAyhIEI0mWSEMOdGqikDWUaiINQlEVAsEkMIZQZijRAG6CpBossZ1JlYM7ASFoiSqKEw6iqLOuZrWNmUDVIIlUZNBqgrMasxqNFUZaIoagaEoqjOqJoiiaKoqizQboKiKNZoN0GaNNEUDRNFmg1QNDUVR//8QAGxABAAICAwAAAAAAAAAAAAAAAUBwEYAwUGD/2gAIAQEAAQUCro1KO3IZbr1BW7SGJhztHFNujRDzqmaTvuD0jQLBecr/AP/EABQRAQAAAAAAAAAAAAAAAAAAAJD/2gAIAQMBAT8BRD//xAAUEQEAAAAAAAAAAAAAAAAAAACQ/9oACAECAQE/AUQ//8QAFBABAAAAAAAAAAAAAAAAAAAAsP/aAAgBAQAGPwI9H//EAB0QAAMBAQEBAQEBAAAAAAAAAAABERAgMDFAQSH/2gAIAQEAAT8h2C1fhe0T8aXKXZjFy+GLhrEUXmtfN96MXbXLF0vF4hl6no9fq8XMGLu8Hq6vTy48Q/8ASC4/hdouFy2Lln8yZO2LhdPEXV5QpdmUuob5YtvF6eLr7iHi28rh8vVsJlxiHqLjF6NC14sfDxdLGQhOGXVxBkyjRPSk14tmtCXLxZS80eIYsuNlEx8UpS6h4hi5nFylKUuXEvd+J6uEPEMXkmPpk4hNmQmNE2EGu0JrIIeIuvpRqkENEJw8ovGlKUvKylz4XHkx4hixi5mMomUu3yuPpeCH1dXM7Y1q9HrJ+FbPF4h9QXFFt4e3Zl4ReLjxexPyZeG+4Tli4hCD4TXzeWiEFt4mzhi1dvi8MpRr8D86XE9Yu1r5W3wvD6eXbi4vE1i5vpCEJ0+Zy9WksZCEIQhS8MXC27Si5pSkGyi1dXiCGTKXL4vFwuniFj4SGPELxW3qDxeVx4hixiHkPmQmJkIQS8ZrxbCY/NfAhiGLLxe7wxZS8TijefwgvRa0QQ+GTEP0pcfFKLH28XD82xDETh+SHi2YmPpBcPF2n28XbxcIfMGQmMmTyZBsW3GhCHyyE8Hlxi5ZcpfNiKLi6xDxPl+9KLtNon1eV0homPF+N4hcTl+CH20IXDRCaxMeLtvEspMS85q1rHjYuZtLxcYsfF4a6nC8Xi8PheLkH4TXwup2h9XZt5QxbD5sITwYuJ2uWIfmeLZjRJ4Ll28NE/HNbP4QXDRBFy6xYteLh5OWL2u3Li6ZdfbLqXSQ8XjPBvEPWvB+k1cXYTKUuvzeLJ3SiGTXwumJ68XD1Yhl85lLqePhDF4XmbeWXGLUPXxNuUvD7Q/B4uHrya/A+7qx4sWQYh8QnhOXwuGiE9GQhOJ1Omy6sfD5Q8Wrqly9rLt7vTWXlFLiGLhLlvh4urr4fu8XF4e3Jr2ctE6nk8XKHsITlLh7MeIYuWIu3wfgXEJjKLKJ8fNXFLqH4rpsWUXmxMuN4saF6IeIfs9YvR4h4hS8rtEEMnF1PKXVsxEJ0spdRBDxDJ3elw8ouEPL4UuXskTFrxYxdMQyeDZRZelw9eP4UXDF0vND4fD5XohrFjxcP3fRYybMhBoQ8WETWQmzWPk8WvFjEPEPljEvBcPhZS+TFw9bE+3i25emL2hPKcvXi7gh8rWIhMmLHjKIvm9oh61iGJcPFwyEITj/2gAMAwEAAgADAAAAEIGCIHDIHKCPCLMDJAMHFKDIEABMACCACFMCOFFKPOCDDGNDBECPCDNGDKJCJEOHGHPCAKAJHLGHLMHMPABBPHEHPIECJIKDDFDBJJKKHFIMMJMIAMNNBIJFOCIJOCCEEIHGFAGCMEDKMGGOHEOGGEFBKBOBKJHFEAIFODHBAABIEGJEGFCBAIFDKGEBMBKDEONGMGOBPHOOBMFNLOEKJBMFDIEDKEEHAMDCGCGBKBEADKLGMJLDABKJEJGNDIABIMAJMBIODCAHCACGKJDGIHGAMPAGNBGIADHBNLODKGEKCPJCDHGPAGAEIDEHJJFPNGIHABLBDFBIMMIBMCKLKBKCJOBBDHEGNJGEKLAGAIELPPFFOOAGKJJMOIJMCODNJEAKNEJAAOGKNCILIADJBIJAIFEABMDKFLIKMHMMDPBKECHFIBGANOLLDGKIFGOKDLEMMBAKMJOJIEKKAKCAHHKLHNNKMNABFCLACIAKCAIFOEMEINBOFADKMNFNCCCBELDOGPBHCACDFBHBAIIDMANKLJPJMFLGCJOEFMLCFAFLAACKDKHLOHGKADFHJMIOEALHPKICAKJAPAIFACDCGMMAFCGNLPNIJDMMLGKNPCHCIPIGGPFHKAFILJAAJOKKCINGPEFILCAAJFPHDHKDFGIAKPHLBAKDDGMEKKDAFCIMHAFNIEAMFANEICICMICGJOGIFAEIIOADDFJDGHDKJDCHMOFBGKHONNHIGEAMANKJPDAJFJOMAIHHPPIPAPIAHIIHPAIHIAHIHIIAAP/EABQRAQAAAAAAAAAAAAAAAAAAAJD/2gAIAQMBAT8QRD//xAAUEQEAAAAAAAAAAAAAAAAAAACQ/9oACAECAQE/EEQ//8QAHhABAQEAAwEBAQEBAAAAAAAAAQARECExQSBRYXH/2gAIAQEAAT8Q3j5K2H9nyTJZDpxs3a8HCx5PHlttksvYMNlcBPcHUy3sdEdcD+p7Lo8Bi9XRJ+S2fwslYUjh4tLeTODiWz7EucLHL1La2zOPUE+ceR259myPJk3g8k1gjhiWGncdce8v8ujqBG2TY6JXa8Idsme28flNYM4+z6tnvAx1dPcez3YWEdpcvkXr+PLBssLBDDscYjz9JxlvfHid2M+RDZHaX8l8nle58t+3aVngNJEbV5rHC5wXSOo/DwjUMFs6lDEot8LLDPWQy4cA7PkrPH0jqyWS0sGS2xyHs9pO4gZwm2Ixt6Wt5Pfs9XYs7lyGWDW8S5bnFoyYdSdk27GXqWDSXINYJ84OGNcJE8s7BtGQYZwbrHnCbLDhuM57EHbO5sRnHsGW98M2GW9ybHkjsOWkepR62GXVk2J9g1lyXWPc8jYMjhclpZBdLeGB2z7erYQw4F4ShbPZCXcOz/kO2Tz9nyGHeDo2bGTwn2cMphgwlZb3klly8Ww20cCBnskkkhjDpPTKTeE1iAv82ZE07JgOQNnCMMdkmQyddS5HTu1tjBdyyGwZJs0AY8uzg88jeCWy3i8/AHcsM4bcG3iN7lycMN0cdLxHceWk5jd74bpMuP2XUcuzbz7MDC3XjG5Ie2hjpNPpu0Ti3u0vCZ2Njje70n26SQPIctGDLtxktmxk1g4RPd55CDWeiXuXF94+IHGhew85jM9MED5PUsasR5f6ujEm2bPaAEZHs94J0xiy0jHCcENjZktOfk+xqDBnBcjtz/YdT2h7ny1J2zjJceAdi6X8NpxP4gy8ukhLltk8JpHTHv42eBoo6dw7wyQA6ltF2IO5cRR2X8jsmHRLjxxDsRdlyz3wBODiXhiHZcunk+SbBkecse/g+5dss6sbGGH484TZMhHeBw7ut4ZiK2XiSSGY7T5bFpbvJFgTgaxPcl1JB1D3+ALxEMNiYEJ5YT5DGrLkd8YFthHvGBKN649gWnll5DvPXCwlnpa2xjo4fbJg5LWy64zJ6Q2bBeJGF3iP9ns6hbPUwbwnu6E97djdt7j+YvFnfJlWD/ec4bvYepI2zR37+G3ueyHG2WETI21ySNYOrcv+XsjsxnsdFpIMMvU9kmN6cTgE9Elk2BZyCy3j1E+3dltEMEuNtbDJF6knb1IPl5CJE2HdvXV7DONtksjsukLsmlmRE2Oi2WPXEDwBjwW9/je+PZ6Y3dOdkMHXGdzaEgwdzEdsggtpfCTbMLs8DojuOMn8BsdM+Xt3sp8llbwR5feW6Q7Me3iGwfYM4zgx0ju+TPbcuS22pFgjYBMmkOoO3y/5a3nAdvvOWX/bq6fLMu8jTe73Haei2+Q9Xt0hvSDGezLpwcjSRIhLCBZOAx07mE1bvU8B5xksJ3kmzx+y5wJ4epdw7woS9xMXZvW2RhEXc4ydXT3kYTbyxx5el64HXgdE8GziEbbZcOA2OiPZd2bDOF6l5uPVmWw7DPJlf4ny9SO23c29yzg7a3gyQzZB3M7Lh6sR3x5LHbauhDJ2yeiO5M6jqTbyfbw4DsLITl3el08l3eLNi4T04NIQnU4LtdkASRZ3LhD1DrJwzIe7zB3eOXUYlxvM3Z75yTZ/2PIuiYsKMdnckeSjr2WkO71eIS5P9wy/y1jtLz/2wlC0seR1wNhhZl0mDvCberwh7lzkbuT3OjEm23hNvJbdvbIPw0Z1HDgezCT7nXcdF4tbbHL3EkEecLf7jXBnuFIdJBMWzwSY3Y8sgy8S9W9/As+XhYNkucr3JsdF2SuxCQ3RJpBk49jyHvnO7O5wl6ltsbNhhLDrIku7I/y8OD7JZpME+RfZ5HcMt2PJsbMlw4t3yzh23Yn1d7wHqLbeTZkuGeiWy+E7HkGT3GIbajDwFhDHnc6gwn3gk2DJeN7hvsTCHcsEiHeLpeOAz5ZZDS9xHY8vv4zfYQtqHfbxLG6bIM4Rw2e8a42f8u9vnH38LITiXcm3hJYJRjy6MrsXlgz2dRbbKPI9v9um8h75Oei6tkZJ2WP41sR2T2gdvJ7X9OGGcG2xwk+ct4Jcl/k9LSMT5wG6yQWSW5bsWTHVstseS5bBtkbO5a8E2J7m5hfbzgRDfIk7nos4LL2CXLO44eH9hLw3RHeMSxPJPsOurHeL1ekHcwQd2XXJ0T2mJ3xBlsOyOxNk8Jtrbwl5ZfwghsdF/CStl4Rq3TwXJciYtOFtLHBdww7jq3SJwwjzo2dx0S6wd271wDJerVbrzvfCT5BnDYVvHDHK/ILDtO2PLyP+8MnV0btI0juCwOGBZdX+IjyTvgeW8Zkd8Ms42fJM4LuH8sHZBsEMuWG+Q8ObwfAOuFcC3epLADgHGd9xx5fJyPsn8jyzuMcJs9dRZN/qTl6uxeeA9x2cLPku/hl/1eN4h74dQZaECacDsmt8lyO3D5er04cW8HAO8IXeG7ts28my+8NvU92R0SaR/XG8Hs1sOvxpM6FiW0Q7xq1dx74fOD7w+Qd8eI7Y7dzzt4vH4S3I7P0wWCHZcjXD2vWXz9LILfI9g7ew5Dv4WeSo8ntgsDzgOE0sJWvy8Sd2O3yL7LlsOzqDJgzh8jyzuyvbzxGOy7I9s/c9jyDucsLNgzhOosbV8n2FjBsuHAeHpCIcs7PbgeT7CzSxIfx4y8bdotSbwLq6mdyHIjFt3hDHkXqPOFtTPkcPks8mnmHW2uFhGEmRrH+y5LZZyXuPOFvbsjZJI1OnnDtwuNoxKyxjdj3xX9nyOCfL0jo74PZ+HtHTy6ZTz8TtDpD6x2+S3uN5DDvZYbqe2y9QxpmQWM7kE6s7i9Qd3yzbAvZAhnctYYdt4fIbxvEuM+u+GJR7wO4djk8Z9l1JpHV8ggx4+wTPV6W5L238Df5eZO+CbGO5dXm9RJf5wBx7y5HcnV2kws759RG5L3ery2O7R4ELqTq7GbOu7wjciyy9RpjpYs757QZPcW8Oo6s1ly7ssOohNqfLWxsdEMF8jtm2T7CWS7H7PAzj7wezyb1GpLc5fJj13LEJ6vVvVu2Wy4wzPY/GlkDyOHy72GGs8A9XRl/Lsd8Pk98BwkXZPceceJUlvtmSYx3ZPBYNlnRewcsCO5wl3jO7LLQtJt643PZbBKOFCdslkTzqI8vVu2DuPIdZZbpHk9piXIdtYxEmwZEytg6smOoThJIJIy3nYd4eiXbu3iCO51aGJkdM+T7aWWQcQYntYkm3q9Q6vHKbd3WSR0h3j1bse8PkLvHV2I0Y4fbveDPqzJ8vTviAntlkKWy8NGTu+WdzBWfJdTl1w4jU+ce4bFv4T7ZZdJ9n2GHC3g7S5Pa7EoQ7wt4T3ZsdW3s8ORvXCOsJJIozxs9tjHnceydS5Hkvce7xbzBxuMv8vTjDj7fZNsjGWR7HRaW9QYT2wZw3pJZ1YXUJHSL/AHwTeBxx9OXyFhyT5eeykPkMYacMwtdt6u0jt2cA7OGZmmzuy/sm2dStsyXUiATZ3d7w+XqWWRqV+Qoy0mDu1x5j3GPY4eWcMOnVrsvcm2fyGcnsIP7PxA3hJGN7g0nHUKt5yuNo2dTiIxN74eyC6Md+3RMzhpxrYOSlvHvG3pHufUP5PaYSGyYS0sLGyJY7WkuWDKEu3Vnu3gXjD1CB3gI++FyEu7CDOMJ8vOKX2Lbpugh28Z86nd4jbyHrhQxeE+oW1l4MnU9Mdz5LbZsW5L3bL+3ZvC3jzJjKVvkHcIjyzhgGDjMumTIs2DC9R5JsGSt6nsw23A2T0sjkDeJ7jkn5Bj+rouoWttWZH+8Ay+x6gwkkglxrkLdjJ48WuG5eLV8vltrB2FlPsdywnHsmeQnjotNqMPVmwllbGbdIvCHZe4849ny9cWOEbHbLlhwbskPc+Q8OHfbxwoXe0CxkI2RZ3GZLL3HZbDscLF9kILOUTDqMmDGSJct74xBkuQ7Pl6hxvSHdvdjg942JJgwlk9/YlttW2wuk6ukPyYdS5HZdOHjb1DvDHdl5ex0/gLsdExbeIch0uyzu8ceyzDqPLJ2y6n2fI8u0PboRqxAFoQ7f/9k=';
+function grainURL(){
+  try {
+    const c = document.createElement('canvas'); c.width = c.height = 192;
+    const x = c.getContext('2d'), d = x.createImageData(192, 192), a = d.data;
+    for (let i = 0; i < a.length; i += 4){ a[i] = 89; a[i+1] = 82; a[i+2] = 69; a[i+3] = Math.random() * Math.random() * 40; }
+    x.putImageData(d, 0, 0);
+    return c.toDataURL('image/png');
+  } catch (e) { return ''; }
+}
 function applyTextures(){
   const svgUrl = s => `url("data:image/svg+xml,${encodeURIComponent(s)}")`;
-  const grain = `<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency=".85" numOctaves="2" stitchTiles="stitch"/><feColorMatrix values="0 0 0 0 .35  0 0 0 0 .32  0 0 0 0 .27  0 0 0 .07 0"/></filter><rect width="100%" height="100%" filter="url(#n)"/></svg>`;
-  const pebble = `<svg xmlns="http://www.w3.org/2000/svg" width="220" height="220"><filter id="p"><feTurbulence type="turbulence" baseFrequency=".09" numOctaves="2" seed="5" stitchTiles="stitch"/><feColorMatrix values="0 0 0 0 .45  0 0 0 0 .38  0 0 0 0 .28  0 0 0 .55 -.08"/></filter><rect width="100%" height="100%" filter="url(#p)"/></svg>`;
   const ring = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 40" preserveAspectRatio="none"><circle cx="10" cy="30.5" r="2.4" fill="#55565c"/><path d="M10.5 30.5 C4 30.5 3.2 6 10 4.5 C15.8 3.4 16.6 22 12.2 28.5" fill="none" stroke="#9fa0a7" stroke-width="2.6" stroke-linecap="round"/><path d="M9.8 28 C5.6 26 5 9 9.6 6.4" fill="none" stroke="#eeeff2" stroke-width="0.9" stroke-linecap="round"/></svg>`;
-  document.body.style.backgroundImage = svgUrl(pebble);
-  $('.sheet').style.backgroundImage = svgUrl(grain);
-  $('#card').style.backgroundImage = svgUrl(grain);
+  document.body.style.backgroundImage = `url("${PEBBLE_JPG}")`;
+  document.body.style.backgroundSize = '220px 220px';
+  const g = grainURL();
+  if (g) for (const el of [$('.sheet'), $('#card')]) { el.style.backgroundImage = `url("${g}")`; el.style.backgroundSize = '96px 96px'; }
   $('.spiral').style.backgroundImage = svgUrl(ring);
 }
 
 /* ---------- board drawing ---------- */
-function renderDefs(){
-  const ang = [35, -35, 58, -58];
-  $('#defs').innerHTML = `
+const PENCIL_FILTER = `
     <filter id="pencil" x="-10%" y="-10%" width="120%" height="120%">
       <feTurbulence type="fractalNoise" baseFrequency="0.035" numOctaves="2" seed="4" result="w"/>
       <feDisplacementMap in="SourceGraphic" in2="w" scale="3.5" xChannelSelector="R" yChannelSelector="G" result="d"/>
       <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="1" seed="2" result="g"/>
       <feColorMatrix in="g" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1.3 0 0 0 .2" result="ga"/>
       <feComposite in="d" in2="ga" operator="in"/>
-    </filter>
+    </filter>`;
+const INK_STYLE = `<style>
+  .pl1{fill:none;stroke:#4d4d55;stroke-width:3.4;stroke-linecap:round;stroke-linejoin:round;opacity:.88}
+  .pl2{fill:none;stroke:#4d4d55;stroke-width:1.6;stroke-linecap:round;opacity:.5}
+  .doodle{fill:none;stroke:#4d4d55;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+  .doodle .dot{fill:#4d4d55;stroke:none} .doodle .thin{stroke-width:2} .doodle .pf{fill:#fbfaf5}
+</style>`;
+
+/* The pencil filter is expensive, so the board's lines and doodles go through it once:
+   they are drawn as one SVG image onto a canvas, and only redrawn when the size or missions change. */
+const INK = {lines: '', art: '', key: '', job: 0, timer: 0};
+function paintInk(){
+  const cv = $('#ink'), r = cv.getBoundingClientRect();
+  if (!r.width || !r.height || !INK.lines) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  let W = Math.round(r.width * dpr), H = Math.round(r.height * dpr);
+  if (W > 3000) { H = Math.round(H * 3000 / W); W = 3000; }
+  const key = W + 'x' + H + '|' + INK.art.length + '|' + (missions ? missions.join('|') : '');
+  if (key === INK.key) return;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 1000" width="${W}" height="${H}">${INK_STYLE}<defs>${PENCIL_FILTER}</defs>`
+    + `<g filter="url(#pencil)">${INK.lines}</g><g class="doodle" filter="url(#pencil)">${INK.art}</g></svg>`;
+  const img = new Image(), job = ++INK.job;
+  img.onload = () => {
+    if (job !== INK.job) return;
+    try {
+      cv.width = W; cv.height = H;
+      cv.getContext('2d').drawImage(img, 0, 0, W, H);
+      INK.key = key;
+      $('#lines').innerHTML = ''; $('#art').innerHTML = '';
+    } catch (e) { inkFallback(); }
+  };
+  img.onerror = () => { if (job === INK.job) inkFallback(); };
+  img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+}
+function inkFallback(){
+  /* plain lines without the pencil texture, if this browser cannot draw the image */
+  $('#ink').width = 1; INK.key = '';
+  $('#lines').innerHTML = INK.lines; $('#art').innerHTML = INK.art;
+}
+function scheduleInk(){ clearTimeout(INK.timer); INK.timer = setTimeout(paintInk, 140); }
+
+function renderDefs(){
+  const ang = [35, -35, 58, -58];
+  $('#defs').innerHTML = `${PENCIL_FILTER}
     ${[0,1,2,3].map(s => `<pattern id="h${s}" width="15" height="15" patternUnits="userSpaceOnUse" patternTransform="rotate(${ang[s]})"><path d="M0,-2 L0,17" style="stroke:var(--p${s})" stroke-width="7" opacity=".36"/></pattern>`).join('')}`;
 }
 function renderBoard(){
@@ -465,8 +524,7 @@ function renderBoard(){
   let lines = '';
   for (let i = 0; i < 4; i++){ const a = INNER[i], b = INNER[(i+1) % 4]; lines += pencil(a[0], a[1], b[0], b[1]); }
   for (let k = 0; k < N; k++){ const t = (k + PHI) / N, p = at(II, t), q = at(OI, t); lines += pencil(p[0], p[1], q[0], q[1]); }
-  $('#lines').innerHTML = lines;
-  let art = '', labels = '';
+  let art = '', dtext = '', labels = '';
   for (let sq = 0; sq < N; sq++){
     const g = GEO[regionOf(sq)], [ax, ay] = g.label, ls = wrap(sqName(sq));
     let b;
@@ -478,11 +536,16 @@ function renderBoard(){
       b = {doodle:[ax, top+38], text: ls.map((l, i) => [ax, top + 106 + i*32, l]), flag:[ax-66, top+26], hl:[ax, ay, 96, H/2 + 18]};
     }
     BLOCKS[sq] = b;
-    art += `<g transform="translate(${b.doodle[0].toFixed(1)},${b.doodle[1].toFixed(1)}) scale(.82)">${D[sqDoodle(sq)]}</g>`;
+    const tr = `translate(${b.doodle[0].toFixed(1)},${b.doodle[1].toFixed(1)}) scale(.82)`, dd = D[sqDoodle(sq)];
+    const words = dd.match(/<text[\s\S]*?<\/text>/g);
+    art += `<g transform="${tr}">${dd.replace(/<text[\s\S]*?<\/text>/g, '')}</g>`;
+    if (words) dtext += `<g transform="${tr}">${words.join('')}</g>`;
     labels += `<text class="lbl">${b.text.map(([x, y, l]) => `<tspan x="${x.toFixed(1)}" y="${y.toFixed(1)}">${esc(l)}</tspan>`).join('')}</text>`;
   }
-  $('#art').innerHTML = art;
+  INK.lines = lines; INK.art = art; INK.key = '';
+  $('#dtext').innerHTML = dtext;
   $('#labels').innerHTML = labels;
+  paintInk();
 }
 function renderOwners(){
   let fill = '', flags = '';
@@ -839,6 +902,8 @@ function boot(data){
   savedGame = lsGet('choego.game');
   if (data && data.state) { state = data.state; if (data.setup) setup = data.setup; if ('missions' in data) missions = data.missions; }
   applyTextures(); renderDefs(); renderBoard(); renderAll();
+  try { new ResizeObserver(scheduleInk).observe($('#paper')); } catch (e) {}
+  window.addEventListener('resize', scheduleInk);
   if (state.phase === 'play' && state.pending) setTimeout(land, 300);
 }
 boot({});
